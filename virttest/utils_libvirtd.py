@@ -4,6 +4,7 @@ Module to control libvirtd service.
 import logging, re
 from virttest import remote, aexpect
 from autotest.client.shared import error
+from autotest.client.shared import service
 from autotest.client import utils, os_dep
 
 
@@ -46,6 +47,22 @@ except ValueError:
                     "utils_libvirtd module will not function normally")
 
 
+class LibVirtdActionRunner(object):
+    """
+    UNTESTED!!!!
+    """
+
+    def __init__(self, service_name,
+                 name_of_init,
+                 run=utils.run):
+        self.service_name = service_name
+        self.service_command_generator = service._command_generators[name_of_init]
+        self.run = run
+
+    def __call__(self, action, **kwargs):
+        return self.run(" ".join(self.service_command_generator(action)(self.service_name)), **kwargs)
+
+
 def service_libvirtd_control(action, remote_ip=None,
                              remote_pwd=None, remote_user='root',
                              libvirtd=LIBVIRTD):
@@ -75,25 +92,33 @@ def service_libvirtd_control(action, remote_ip=None,
         except remote.LoginError, detail:
             raise LibvirtdActionError(action, detail)
 
+    # This won't work if action is a systemd verb and init is SysV.
+    if session:
+        _, init_name = session.cmd_status_output("basename $(readlink /proc/1/exe)")
+        str_cmd = LibVirtdActionRunner("libvirtd", init_name, run=lambda x, **kwargs: x)
+    else:
+        init_name = service.get_name_of_init()
+        utils_runner = LibVirtdActionRunner("libvirtd", init_name, run=utils.run)
+
     if action in actions:
         try:
             if session:
-                session.cmd(service_cmd)
+                session.cmd(str_cmd(action))
             else:
-                utils.run(service_cmd)
+                utils_runner(action)
         except (error.CmdError, aexpect.ShellError), detail:
             raise LibvirtdActionError(action, detail)
 
     elif action == "status":
         if session:
             try:
-                status, output = session.cmd_status_output(service_cmd)
+                status, output = session.cmd_status_output(str_cmd(action))
             except aexpect.ShellError, detail:
                 raise LibvirtdActionError(action, detail)
             if status:
                 raise LibvirtdActionError(action, output)
         else:
-            cmd_result = utils.run(service_cmd, ignore_status=True)
+            cmd_result = utils_runner(action, ignore_status=True)
             if cmd_result.exit_status:
                 raise LibvirtdActionError(action, cmd_result.stderr)
             output = cmd_result.stdout
